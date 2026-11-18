@@ -1,0 +1,138 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+    id 'dev.flutter.flutter-gradle-plugin'
+}
+
+def modelDirectory = rootProject.file('../models/assets/models')
+def modelManifestFile = new File(modelDirectory, 'manifest.json')
+def modelManifest = new groovy.json.JsonSlurper().parse(modelManifestFile)
+def detectorSettings = modelManifest.detector
+def manifestSha256 = java.security.MessageDigest.getInstance('SHA-256')
+    .digest(modelManifestFile.bytes).encodeHex().toString()
+def signedRelease = System.getenv('MIANBAN_SIGNED_RELEASE') == 'true'
+def releaseKeystore = System.getenv('ANDROID_KEYSTORE_FILE')
+def releasePassword = System.getenv('ANDROID_KEYSTORE_PASSWORD')
+if (signedRelease && (!releaseKeystore || !file(releaseKeystore).isFile() || !releasePassword)) {
+    throw new GradleException('正式签名需要有效的 ANDROID_KEYSTORE_FILE 和 ANDROID_KEYSTORE_PASSWORD')
+}
+
+android {
+    namespace = 'com.mianban.sleep'
+    buildFeatures { buildConfig = true }
+    compileSdk = 36
+
+    defaultConfig {
+        applicationId = 'com.mianban.sleep'
+        minSdk = 26
+        targetSdk = 36
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
+        testInstrumentationRunner = 'androidx.test.runner.AndroidJUnitRunner'
+        buildConfigField 'String', 'MODEL_ID', groovy.json.JsonOutput.toJson(modelManifest.id)
+        buildConfigField 'String', 'MODEL_VERSION', groovy.json.JsonOutput.toJson(modelManifest.version)
+        buildConfigField 'String', 'MODEL_DISPLAY_NAME', groovy.json.JsonOutput.toJson(modelManifest.displayName)
+        buildConfigField 'String', 'MODEL_SHA256', groovy.json.JsonOutput.toJson(modelManifest.weights.sha256)
+        buildConfigField 'String', 'MODEL_ASSET_PATH', groovy.json.JsonOutput.toJson('flutter_assets/models/assets/models/' + modelManifest.weights.file)
+        buildConfigField 'String', 'MODEL_LABELS_PATH', groovy.json.JsonOutput.toJson('flutter_assets/models/assets/models/' + modelManifest.labels.file)
+        buildConfigField 'String', 'MODEL_LABELS_SHA256', groovy.json.JsonOutput.toJson(modelManifest.labels.sha256)
+        buildConfigField 'String', 'MODEL_CONFIG_SHA256', groovy.json.JsonOutput.toJson(manifestSha256)
+        buildConfigField 'String', 'DETECTOR_VERSION', groovy.json.JsonOutput.toJson(detectorSettings.version)
+        buildConfigField 'String', 'DETECTOR_SETTINGS_JSON', groovy.json.JsonOutput.toJson(groovy.json.JsonOutput.toJson(detectorSettings))
+        buildConfigField 'int', 'MODEL_SAMPLE_RATE', modelManifest.input.sampleRateHz.toString()
+        buildConfigField 'int', 'MODEL_FRAME_SAMPLES', modelManifest.input.frameSamples.toString()
+        buildConfigField 'int', 'MODEL_LABEL_COUNT', modelManifest.labels.count.toString()
+        buildConfigField 'float', 'SNORE_THRESHOLD', "${detectorSettings.snoreThreshold}f"
+        buildConfigField 'float', 'UNCERTAIN_THRESHOLD', "${detectorSettings.uncertainThreshold}f"
+        buildConfigField 'float', 'COMPETITION_RATIO', "${detectorSettings.competitionRatio}f"
+        buildConfigField 'double', 'CLIPPING_THRESHOLD', detectorSettings.clippingThreshold.toString() + 'd'
+        buildConfigField 'int', 'CALIBRATION_FRAMES', detectorSettings.calibrationFrames.toString()
+        buildConfigField 'double', 'BASELINE_FLOOR_DBFS', detectorSettings.baselineFloorDbfs.toString() + 'd'
+        buildConfigField 'double', 'STRONG_GAIN_DB', detectorSettings.strongGainDb.toString() + 'd'
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    androidResources {
+        noCompress += ['tflite']
+    }
+
+    signingConfigs {
+        if (signedRelease) {
+            production {
+                storeFile = file(releaseKeystore)
+                storePassword = releasePassword
+                storeType = 'PKCS12'
+                keyAlias = 'mianban'
+                keyPassword = releasePassword
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            applicationIdSuffix = providers.gradleProperty('MIANBAN_INTEGRATION').orNull == 'true' ? '.integration' : '.debug'
+        }
+        release {
+            minifyEnabled = false
+            shrinkResources = false
+            if (signedRelease) {
+                signingConfig = signingConfigs.production
+            } else {
+                // Preview upgrades retain the alpha app's private recordings.
+                applicationIdSuffix = '.debug'
+                signingConfig = signingConfigs.debug
+            }
+        }
+    }
+}
+
+flutter { source = '../..' }
+
+def verifyYamnet = tasks.register('verifyYamnet') {
+    inputs.files(fileTree(modelDirectory))
+    doLast {
+        if (modelManifest.schemaVersion != 1 || modelManifest.input.sampleRateHz != 16000 ||
+            modelManifest.input.channels != 1 || modelManifest.input.frameSamples != 15600 ||
+            modelManifest.input.type != 'float32' || modelManifest.input.pcm16Divisor != 32768 ||
+            modelManifest.output.scoresTensorIndex != 0 || modelManifest.labels.count != 521 ||
+            modelManifest.labels.snore != 'Snoring' || modelManifest.labels.speech != 'Speech' ||
+            modelManifest.labels.music != 'Music') {
+            throw new GradleException('YAMNet 输入输出规格与当前推理代码不匹配')
+        }
+        if (!(0 <= detectorSettings.uncertainThreshold &&
+            detectorSettings.uncertainThreshold < detectorSettings.snoreThreshold &&
+            detectorSettings.snoreThreshold <= 1 && detectorSettings.competitionRatio > 0 &&
+            detectorSettings.competitionRatio <= 1 && detectorSettings.clippingThreshold > 0 &&
+            detectorSettings.clippingThreshold < 1 && detectorSettings.calibrationFrames >= 1 &&
+            detectorSettings.strongGainDb > 0)) {
+            throw new GradleException('鼾声检测参数无效')
+        }
+        [modelManifest.weights, modelManifest.labels].each { artifact ->
+            if (!(artifact.file ==~ /[A-Za-z0-9_.-]+/)) throw new GradleException('模型文件名无效')
+            def asset = new File(modelDirectory, artifact.file)
+            def checksum = java.security.MessageDigest.getInstance('SHA-256')
+                .digest(asset.bytes).encodeHex().toString()
+            if (checksum != artifact.sha256) throw new GradleException("模型文件校验失败 ${artifact.file}")
+        }
+        def labels = new File(modelDirectory, modelManifest.labels.file).readLines('UTF-8')
+        if (labels.size() != modelManifest.labels.count ||
+            !labels.containsAll(['Snoring', 'Speech', 'Music'])) {
+            throw new GradleException('YAMNet 标签文件不匹配')
+        }
+    }
+}
+tasks.named('preBuild').configure { dependsOn(verifyYamnet) }
+
+dependencies {
+    implementation 'androidx.core:core:1.17.0'
+    implementation 'com.google.ai.edge.litert:litert:1.4.1'
+    constraints { debugImplementation 'androidx.test:runner:1.6.2' }
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20250107'
+    androidTestImplementation 'androidx.test:runner:1.6.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+}

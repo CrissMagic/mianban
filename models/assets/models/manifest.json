@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "id": "yamnet-audioset",
+  "version": "1",
+  "displayName": "YAMNet 1 / alpha-1",
+  "license": "Apache-2.0",
+  "source": "https://github.com/tensorflow/models/tree/master/research/audioset/yamnet",
+  "downloadUrl": "https://storage.googleapis.com/mediapipe-models/audio_classifier/yamnet/float32/1/yamnet.tflite",
+  "weights": {
+    "file": "yamnet.tflite",
+    "sha256": "4d8b4a53282dc83ef04e3e7dbc4fbc98082e34e44ed798e16c3a0cdd4c584faf",
+    "fineTuned": false
+  },
+  "labels": {
+    "file": "labels.txt",
+    "sha256": "e1841217095e1920f2b71a1d2c233289114d6774443369f06d61cce77b52e09f",
+    "count": 521,
+    "snore": "Snoring",
+    "speech": "Speech",
+    "music": "Music"
+  },
+  "input": {
+    "sampleRateHz": 16000,
+    "channels": 1,
+    "frameSamples": 15600,
+    "type": "float32",
+    "pcm16Divisor": 32768
+  },
+  "output": {
+    "scoresTensorIndex": 0
+  },
+  "detector": {
+    "version": "alpha-1",
+    "snoreThreshold": 0.35,
+    "uncertainThreshold": 0.15,
+    "competitionRatio": 0.8,
+    "clippingThreshold": 0.03,
+    "calibrationFrames": 15,
+    "baselineFloorDbfs": -65,
+    "strongGainDb": 12
+  }
+}

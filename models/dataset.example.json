@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "recordings": [
+    {
+      "id": "person001-night001",
+      "audio": "data/person001-night001.wav",
+      "subjectId": "person001",
+      "split": "test",
+      "rights": "填写录音来源、本人同意和允许的使用范围",
+      "annotationComplete": true,
+      "snoreEvents": [
+        {"startSeconds": 20.0, "endSeconds": 22.5},
+        {"startSeconds": 25.0, "endSeconds": 27.0}
+      ]
+    }
+  ]
+}
